@@ -1,139 +1,155 @@
-# Unraid MCP2221 Powered Screen
+# Unraid MCP2221 Screen
 
-Rust based MCP2221 powered info screen for an Unraid server
+Tiny Rust service that renders live Unraid metrics on an SSD1306 OLED over an MCP2221 USB-to-I2C bridge.
 
-This uses an Adafruit MCP2221 breakout board [www.adafruit.com/product/4471](https://www.adafruit.com/product/4471)
+Built for low resource usage and easy Docker deployment on Unraid.
 
-## Local First Test Plan
+## What It Shows
 
-1. Build locally:
+- Memory page: RAM used and total
+- Storage pages: Array and Cache usage, size, disk count, active disk count
+- Page index indicator (for example 1/3)
+- Optional button on MCP2221 GP1 to cycle pages
 
-   ```bash
-   docker build -t unraid-mcp2221-screen:local .
-   ```
-2. Verify container startup without hardware:
+## Hardware
 
-   ```bash
-   docker run --rm -e MCP2221_DRY_RUN=1 unraid-mcp2221-screen:local
-   ```
-3. Linux/Unraid hardware run (USB pass-through required):
+- MCP2221 breakout (example: Adafruit 4471)
+- SSD1306 I2C OLED display (commonly 128x64)
+- Optional button wired to MCP2221 GP1 (active-low)
 
-   ```bash
-   docker run --rm --privileged -v /dev/bus/usb:/dev/bus/usb unraid-mcp2221-screen:local
-   ```
+Important: this app uses HID access (hidapi), not the MCP2221 UART serial interface.
 
-## Unraid Pass-Through Notes
+## Quick Start (Local)
 
-If you can see this on the Unraid host:
+1. Build image:
 
 ```bash
-ls /dev/serial/by-id
-usb-Microchip_Technology_Inc._MCP2221_USB-I2C_UART_Combo-if00
+docker build -t unraid-mcp2221-screen:local .
 ```
 
-the device is attached, but this Rust app uses HID access (via hidapi), not the UART serial interface.
-
-For MCP2221 in Docker, the most reliable run is:
+2. Run dry mode (no hardware required):
 
 ```bash
-docker run --rm \
-   --privileged \
-   -v /dev/bus/usb:/dev/bus/usb \
-   -v /run/udev:/run/udev:ro \
-   unraid-mcp2221-screen:local
+docker run --rm -e MCP2221_DRY_RUN=1 unraid-mcp2221-screen:local
 ```
 
-Quick container-side visibility check:
-
-```bash
-docker run --rm --privileged -v /dev/bus/usb:/dev/bus/usb -v /run/udev:/run/udev:ro debian:bookworm-slim sh -lc 'ls /dev/hidraw* 2>/dev/null || true; ls /dev/bus/usb/*/* | head'
-```
-
-If the app still reports "No HID devices with requested VID/PID found", verify the container is running privileged and the MCP2221 is not claimed by another process.
-
-## No-Privileged Setup With udev (Recommended)
-
-You can run without privileged mode by mapping one stable device node.
-
-1. Create a persistent udev rule on the Unraid host:
-
-   ```bash
-   mkdir -p /boot/config/udev/rules.d
-   cat >/boot/config/udev/rules.d/99-mcp2221.rules <<'EOF'
-   SUBSYSTEM=="hidraw", ATTRS{idVendor}=="04d8", ATTRS{idProduct}=="00dd", MODE:="0660", GROUP:="users", SYMLINK+="mcp2221"
-   EOF
-   ```
-2. Verify the stable symlink exists:
-
-   ```bash
-   ls -l /dev/mcp2221
-   ```
-3. In the Unraid Docker template, use:
-
-   - Privileged: `No`
-   - Config Type: `Device`
-     - Name: `MCP2221 HID`
-     - Value: `/dev/mcp2221:/dev/hidraw0`
-   - Config Type: `Path`
-     - Host Path: `/run/udev`
-     - Container Path: `/run/udev`
-     - Access Mode: `Read Only`
-4. Start the container and test.
-
-Why `/dev/hidraw0` in the container?
-
-- `hidapi` opens the hidraw path it enumerates (for example `/dev/hidraw0`).
-- Mapping `/dev/mcp2221` to `/dev/hidraw0` keeps host-side stability while matching the in-container path that `hidapi` opens.
-
-Equivalent CLI run:
+3. Run with hardware (simple privileged test):
 
 ```bash
 docker run --rm \
-   -v /run/udev:/run/udev:ro \
-   --device=/dev/mcp2221:/dev/hidraw0 \
-   ghcr.io/h3jones/unraid-mcp2221-screen:master
+  --privileged \
+  -v /dev/bus/usb:/dev/bus/usb \
+  -v /run/udev:/run/udev:ro \
+  unraid-mcp2221-screen:local
 ```
 
-## Notes
+## Unraid Deployment
 
-- The binary tries SSD1306 addresses `0x3C` then `0x3D`.
-- It tries I2C bus speeds `100k` and `50k`.
-- `MCP2221_DRY_RUN=1` skips all hardware access and is intended for local sanity checks.
-- One page-cycle button is wired on MCP2221 `GP1` (active-low). A press advances to the next screen.
-- Button polling is disabled by default; set `MCP2221_ENABLE_BUTTON=1` to enable it.
-- Button polling now uses the same MCP2221 session as display rendering to avoid dual-connection bus contention.
+### Option A: Quick Validation (Privileged)
 
-## Live GraphQL Metrics
+```bash
+docker run --rm \
+  --privileged \
+  -v /dev/bus/usb:/dev/bus/usb \
+  -v /run/udev:/run/udev:ro \
+  ghcr.io/h3jones/unraid-mcp2221-screen:master
+```
 
-The app now queries Unraid GraphQL for live values instead of fixed stubs.
+### Option B: Recommended (Non-Privileged With udev)
 
-- Preferred endpoint env var: `UNRAID_GRAPHQL_URL` (optional override)
-- API key env var: `UNRAID_API_KEY`
+1. Create persistent udev rule on Unraid host:
 
-Endpoint discovery is dynamic at startup. If `UNRAID_GRAPHQL_URL` is not set or cannot be resolved, the app tries:
+```bash
+mkdir -p /boot/config/udev/rules.d
+cat >/boot/config/udev/rules.d/99-mcp2221.rules <<'EOF'
+SUBSYSTEM=="hidraw", ATTRS{idVendor}=="04d8", ATTRS{idProduct}=="00dd", MODE:="0660", GROUP:="users", SYMLINK+="mcp2221"
+EOF
+```
 
-- `http://$HOST_HOSTNAME/graphql` (from container env)
-- `http://$HOST_HOSTNAME.local/graphql`
-- `http://tower.local/graphql`
+2. Verify symlink:
 
-The first hostname that resolves is selected, and the app logs:
+```bash
+ls -l /dev/mcp2221
+```
 
-- `[unraid] selected graphql endpoint: ...`
+3. In Unraid Docker template:
 
-After startup, the app uses that selected endpoint for normal refreshes.
+- Privileged: No
+- Device mapping: /dev/mcp2221:/dev/hidraw0
+- Path mapping: /run/udev -> /run/udev (Read Only)
 
-Queried values:
+4. Start container.
 
-- `server.lanip` for current IP
-- `metrics.memory.total` and `metrics.memory.used` for RAM used/max
-- `array.capacity.kilobytes.total/used` for array percent and max TB
-- `array.caches` (`name=cache`, `fsSize`, `fsUsed`) for cache percent and max TB
-- `info.os.uptime` to derive uptime display (`Xd YYh`)
+Equivalent CLI:
 
-If live query fails, the app logs the error and temporarily falls back to representative values so the screen keeps updating.
+```bash
+docker run --rm \
+  -v /run/udev:/run/udev:ro \
+  --device=/dev/mcp2221:/dev/hidraw0 \
+  ghcr.io/h3jones/unraid-mcp2221-screen:master
+```
 
-## Project Status
+## Configuration
 
-- [X] Test deployment to private ghcr and pull from unraid
-- [X] Deploy to unraid and test mcp2221 with example output
-- [X] Integrate with unriad api to pull metrics
+Environment variables:
+
+- UNRAID_API_KEY: required, Unraid GraphQL API key
+- UNRAID_GRAPHQL_URL: optional endpoint override
+- MCP2221_DRY_RUN: set to 1 for console preview without hardware
+- MCP2221_ENABLE_BUTTON: set to 1 to enable GP1 button polling
+
+## GraphQL Endpoint Selection
+
+At startup, the app resolves and selects one endpoint.
+
+Priority order:
+
+1. UNRAID_GRAPHQL_URL (if set)
+2. http://$HOST_HOSTNAME/graphql
+3. http://$HOST_HOSTNAME.local/graphql
+4. http://tower.local/graphql
+
+The first resolvable hostname is selected and logged:
+
+```text
+[unraid] selected graphql endpoint: ...
+```
+
+After startup, the selected endpoint is reused for normal refreshes.
+
+## Runtime Notes
+
+- SSD1306 addresses attempted: 0x3C then 0x3D
+- I2C speeds attempted: 100k then 50k
+- Button polling shares the same MCP2221 session as display writes to reduce contention
+
+## Troubleshooting
+
+No HID device found:
+
+- Confirm MCP2221 is attached
+- Confirm container has correct device access
+- Check /run/udev is mounted read-only
+- Ensure no other process is exclusively using the MCP2221
+
+Hostname resolution issues:
+
+- Check HOST_HOSTNAME in container environment
+- Test DNS from container shell with getent hosts <hostname>
+- Set UNRAID_GRAPHQL_URL explicitly as a fallback
+
+GraphQL auth errors:
+
+- Verify UNRAID_API_KEY is set correctly
+- Watch for accidental hidden characters in variable names/values
+
+## Development
+
+```bash
+cargo check
+cargo run
+```
+
+## Project State
+
+Current focus is stability and deployment ergonomics on Unraid. Contributions and issue reports are welcome.
