@@ -1,0 +1,10 @@
+[package]
+name = "unraid-mcp2221-screen"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+embedded-graphics = "0.8"
+embedded-hal = "1.0"
+mcp2221-hal = "0.1"
+ssd1306 = "0.10"
