@@ -175,11 +175,10 @@ impl UnraidClient {
 fn build_graphql_urls() -> Vec<String> {
     let mut urls = Vec::new();
 
-    if let Ok(explicit) = env::var("UNRAID_GRAPHQL_URL") {
-        if let Some(url) = normalize_graphql_url(&explicit) {
+    if let Ok(explicit) = env::var("UNRAID_GRAPHQL_URL")
+        && let Some(url) = normalize_graphql_url(&explicit) {
             urls.push(url);
         }
-    }
 
     if let Ok(hostname) = env::var("HOST_HOSTNAME") {
         let host = hostname.trim().to_ascii_lowercase();

@@ -168,13 +168,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         page_index = page_index.min(total_pages(&snapshot).saturating_sub(1));
 
-        if should_render {
-            if let Err(err) = render_metrics_page(&mut display_connection.display, page_index, &snapshot) {
+        if should_render
+            && let Err(err) = render_metrics_page(&mut display_connection.display, page_index, &snapshot) {
                 eprintln!("Display write failed: {err}. Reconnecting display...");
                 button_reader.configured = false;
                 display_connection = connect_display()?;
             }
-        }
     }
 }
 
@@ -336,7 +335,7 @@ fn update_page(current: usize, actions: ButtonActions, auto_cycle_pages: bool, t
         return (current + total - 1) % total;
     }
 
-    if auto_cycle_pages && tick % 3 == 0 {
+    if auto_cycle_pages && tick.is_multiple_of(3) {
         return (current + 1) % total;
     }
 
