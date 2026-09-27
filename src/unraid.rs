@@ -1,4 +1,8 @@
-use std::{env, io, time::Duration};
+use std::{
+    env, io,
+    net::ToSocketAddrs,
+    time::Duration,
+};
 
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
@@ -108,8 +112,7 @@ struct ArrayDisk {
 
 impl UnraidClient {
     pub fn from_env() -> io::Result<Self> {
-        let graphql_url =
-            env::var("UNRAID_GRAPHQL_URL").unwrap_or_else(|_| "http://tower.local/graphql".to_string());
+        let graphql_url = select_graphql_url(&build_graphql_urls())?;
 
         let api_key = env::var("UNRAID_API_KEY")
             .ok()
@@ -129,6 +132,10 @@ impl UnraidClient {
     }
 
     pub async fn fetch_metrics_snapshot(&self) -> io::Result<MetricsSnapshot> {
+        self.fetch_metrics_from_url(&self.graphql_url).await
+    }
+
+    async fn fetch_metrics_from_url(&self, graphql_url: &str) -> io::Result<MetricsSnapshot> {
         #[derive(serde::Serialize)]
         struct QueryBody<'a> {
             query: &'a str,
@@ -136,7 +143,7 @@ impl UnraidClient {
 
         let response = self
             .http
-            .post(&self.graphql_url)
+            .post(graphql_url)
             .header("x-api-key", &self.api_key)
             .json(&QueryBody { query: UNRAID_QUERY })
             .send()
@@ -162,6 +169,102 @@ impl UnraidClient {
             .ok_or_else(|| io::Error::other("graphql response missing data"))?;
 
         Ok(map_graphql_to_snapshot(data))
+    }
+}
+
+fn build_graphql_urls() -> Vec<String> {
+    let mut urls = Vec::new();
+
+    if let Ok(explicit) = env::var("UNRAID_GRAPHQL_URL") {
+        if let Some(url) = normalize_graphql_url(&explicit) {
+            urls.push(url);
+        }
+    }
+
+    if let Ok(hostname) = env::var("HOST_HOSTNAME") {
+        let host = hostname.trim().to_ascii_lowercase();
+        if !host.is_empty() {
+            if let Some(url) = normalize_graphql_url(&format!("http://{host}")) {
+                urls.push(url);
+            }
+            if let Some(url) = normalize_graphql_url(&format!("http://{host}.local")) {
+                urls.push(url);
+            }
+        }
+    }
+
+    if let Some(url) = normalize_graphql_url("http://tower.local") {
+        urls.push(url);
+    }
+
+    let mut deduped = Vec::new();
+    for url in urls {
+        if !deduped.iter().any(|u| u == &url) {
+            deduped.push(url);
+        }
+    }
+
+    deduped
+}
+
+fn select_graphql_url(candidates: &[String]) -> io::Result<String> {
+    if candidates.is_empty() {
+        return Err(io::Error::other(
+            "No GraphQL endpoint candidates found. Set UNRAID_GRAPHQL_URL or HOST_HOSTNAME",
+        ));
+    }
+
+    let mut failures = Vec::new();
+    for url in candidates {
+        match resolve_url_host(url) {
+            Ok(()) => {
+                eprintln!("[unraid] selected graphql endpoint: {url}");
+                return Ok(url.clone());
+            }
+            Err(err) => failures.push(format!("{url} => {err}")),
+        }
+    }
+
+    Err(io::Error::other(format!(
+        "No resolvable GraphQL endpoints. Tried: {}",
+        failures.join(" | ")
+    )))
+}
+
+fn resolve_url_host(url: &str) -> io::Result<()> {
+    let parsed = reqwest::Url::parse(url)
+        .map_err(|e| io::Error::other(format!("invalid graphql url '{url}': {e}")))?;
+
+    let host = parsed
+        .host_str()
+        .ok_or_else(|| io::Error::other(format!("url has no host: {url}")))?;
+    let port = parsed
+        .port_or_known_default()
+        .ok_or_else(|| io::Error::other(format!("url has unknown port: {url}")))?;
+
+    let mut addresses = (host, port)
+        .to_socket_addrs()
+        .map_err(|e| io::Error::other(format!("dns lookup failed for {host}:{port}: {e}")))?;
+
+    if addresses.next().is_some() {
+        Ok(())
+    } else {
+        Err(io::Error::other(format!(
+            "dns lookup returned no addresses for {host}:{port}"
+        )))
+    }
+}
+
+fn normalize_graphql_url(value: &str) -> Option<String> {
+    let trimmed = value.trim().trim_end_matches('/');
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    if trimmed.ends_with("/graphql") {
+        Some(trimmed.to_string())
+    } else {
+        Some(format!("{trimmed}/graphql"))
     }
 }
 

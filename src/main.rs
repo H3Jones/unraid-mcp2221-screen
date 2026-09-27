@@ -95,7 +95,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
-    let unraid_client = match UnraidClient::from_env() {
+    let mut unraid_client = match UnraidClient::from_env() {
         Ok(client) => Some(client),
         Err(err) => {
             eprintln!("Live metrics disabled: {err}. Falling back to representative stub values.");
@@ -107,7 +107,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut button_reader = ButtonReader::new();
     let mut page_index: usize = 0;
     let mut tick_counter: u64 = 0;
-    let mut snapshot = fetch_metrics(tick_counter, unraid_client.as_ref()).await;
+    let mut snapshot = fetch_metrics(tick_counter, unraid_client.as_mut()).await;
 
     let mut metrics_interval = time::interval(METRICS_REFRESH_INTERVAL);
     metrics_interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
@@ -123,7 +123,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         tokio::select! {
             _ = metrics_interval.tick() => {
                 tick_counter += 1;
-                snapshot = fetch_metrics(tick_counter, unraid_client.as_ref()).await;
+                snapshot = fetch_metrics(tick_counter, unraid_client.as_mut()).await;
 
                 let updated = update_page(
                     page_index,
@@ -267,7 +267,7 @@ async fn fetch_metrics_stub(tick: u64) -> MetricsSnapshot {
     }
 }
 
-async fn fetch_metrics(tick: u64, client: Option<&UnraidClient>) -> MetricsSnapshot {
+async fn fetch_metrics(tick: u64, client: Option<&mut UnraidClient>) -> MetricsSnapshot {
     let Some(client) = client else {
         return fetch_metrics_stub(tick).await;
     };

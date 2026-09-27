@@ -1,6 +1,8 @@
 # Unraid MCP2221 Powered Screen
 
-Minimal Rust container for proving MCP2221 USB access from Docker by writing `Hello` to an SSD1306 128x64 display over I2C.
+Rust based MCP2221 powered info screen for an Unraid server
+
+This uses an Adafruit MCP2221 breakout board [www.adafruit.com/product/4471](https://www.adafruit.com/product/4471)
 
 ## Local First Test Plan
 
@@ -105,8 +107,20 @@ docker run --rm \
 
 The app now queries Unraid GraphQL for live values instead of fixed stubs.
 
-- Endpoint env var: `UNRAID_GRAPHQL_URL` (default: `http://tower.local/graphql`)
+- Preferred endpoint env var: `UNRAID_GRAPHQL_URL` (optional override)
 - API key env var: `UNRAID_API_KEY`
+
+Endpoint discovery is dynamic at startup. If `UNRAID_GRAPHQL_URL` is not set or cannot be resolved, the app tries:
+
+- `http://$HOST_HOSTNAME/graphql` (from container env)
+- `http://$HOST_HOSTNAME.local/graphql`
+- `http://tower.local/graphql`
+
+The first hostname that resolves is selected, and the app logs:
+
+- `[unraid] selected graphql endpoint: ...`
+
+After startup, the app uses that selected endpoint for normal refreshes.
 
 Queried values:
 
