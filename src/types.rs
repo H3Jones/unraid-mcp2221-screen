@@ -1,4 +1,5 @@
 #[derive(Clone, Debug)]
+/// Metrics for a single storage page.
 pub struct StoragePageMetrics {
     pub title: String,
     pub used_pct: f32,
@@ -8,6 +9,7 @@ pub struct StoragePageMetrics {
 }
 
 #[derive(Clone, Debug)]
+/// Snapshot of the current system metrics.
 pub struct MetricsSnapshot {
     pub ip_address: String,
     pub uptime: String,

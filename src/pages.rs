@@ -1,6 +1,13 @@
 use crate::types::MetricsSnapshot;
 
 const DISPLAY_LINES: usize = 6;
+const LABEL_WIDTH: usize = 6;
+
+macro_rules! metric_line {
+    ($label:expr, $($arg:tt)*) => {
+        format!("{:<width$} {}", $label, format!($($arg)*), width = LABEL_WIDTH)
+    };
+}
 
 trait InfoPage {
     fn build(&self, page_index: usize, total_pages: usize, metrics: &MetricsSnapshot) -> Vec<String>;
@@ -12,11 +19,11 @@ impl InfoPage for OverviewPage {
     fn build(&self, page_index: usize, total_pages: usize, metrics: &MetricsSnapshot) -> Vec<String> {
         normalize_page_lines(vec![
             build_header_line("Overview", page_index, total_pages),
-            format!("IP     {}", metrics.ip_address),
-            format!("RAM    {:.1}/{:.1} GiB", metrics.ram_used_gib, metrics.ram_max_gib),
-            format!("Array  {:.0}% / {:.0} TB", metrics.array_used_pct, metrics.array_max_tb),
-            format!("Cache  {:.0}% / {:.0} TB", metrics.cache_used_pct, metrics.cache_max_tb),
-            format!("UP     {}", metrics.uptime),
+            metric_line!("IP", "{}", metrics.ip_address),
+            metric_line!("RAM", "{:.1}/{:.1} GiB", metrics.ram_used_gib, metrics.ram_max_gib),
+            metric_line!("Array", "{:.0}% / {:.0} TB", metrics.array_used_pct, metrics.array_max_tb),
+            metric_line!("Cache", "{:.0}% / {:.0} TB", metrics.cache_used_pct, metrics.cache_max_tb),
+            metric_line!("Uptime", "{}", metrics.uptime),
         ])
     }
 }
@@ -34,11 +41,10 @@ impl InfoPage for MemoryPage {
 
         normalize_page_lines(vec![
             build_header_line("Memory", page_index, total_pages),
-            format!("Used   {:.1} GiB", metrics.ram_used_gib),
-            format!("Total  {:.1} GiB", metrics.ram_max_gib),
-            format!("Free   {:.1} GiB", ram_free),
-            format!("Usage  {:.0}%", ram_pct),
-            "Live memory data".to_string(),
+            metric_line!("Used", "{:.1} GiB", metrics.ram_used_gib),
+            metric_line!("Total", "{:.1} GiB", metrics.ram_max_gib),
+            metric_line!("Free", "{:.1} GiB", ram_free),
+            metric_line!("Usage", "{:.0}%", ram_pct),
         ])
     }
 }
@@ -58,9 +64,9 @@ impl InfoPage for StoragePage {
 
         normalize_page_lines(vec![
             build_header_line(&format!("Storage:{}", storage.title), page_index, total_pages),
-            format!("Used   {:.0}% / {:.1} TB", storage.used_pct, storage.max_tb),
-            format!("Disks  {}", storage.disk_count),
-            format!("Active {}", storage.active_count),
+            metric_line!("Used", "{:.0}% / {:.1} TB", storage.used_pct, storage.max_tb),
+            metric_line!("Disks", "{}", storage.disk_count),
+            metric_line!("Active", "{}", storage.active_count),
         ])
     }
 }
@@ -95,6 +101,7 @@ fn build_pages(metrics: &MetricsSnapshot) -> Vec<Box<dyn InfoPage>> {
     pages
 }
 
+/// Ensures the page has exactly `DISPLAY_LINES` lines, padding with empty lines if necessary.
 fn normalize_page_lines(mut lines: Vec<String>) -> Vec<String> {
     lines.truncate(DISPLAY_LINES);
     while lines.len() < DISPLAY_LINES {
