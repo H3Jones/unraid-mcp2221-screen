@@ -1,5 +1,10 @@
 use std::{env, io, time::Duration};
 
+mod types;
+mod unraid;
+
+use crate::types::MetricsSnapshot;
+use crate::unraid::UnraidClient;
 use display_interface_i2c::I2CInterface;
 use embedded_graphics::{
     mono_font::{MonoTextStyleBuilder, ascii::FONT_6X10},
@@ -27,17 +32,6 @@ struct DisplayConnection {
     speed_bps: u32,
 }
 
-#[derive(Clone, Debug)]
-struct MetricsSnapshot {
-    ip_address: String,
-    uptime: String,
-    ram_used_gib: f32,
-    ram_max_gib: f32,
-    array_used_pct: f32,
-    array_max_tb: f32,
-    cache_used_pct: f32,
-    cache_max_tb: f32,
-}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ScreenPage {
@@ -126,11 +120,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
+    let unraid_client = match UnraidClient::from_env() {
+        Ok(client) => Some(client),
+        Err(err) => {
+            eprintln!("Live metrics disabled: {err}. Falling back to representative stub values.");
+            None
+        }
+    };
+
     let mut display_connection = connect_display()?;
     let mut button_reader = ButtonReader::new();
     let mut page = ScreenPage::Overview;
     let mut tick_counter: u64 = 0;
-    let mut snapshot = fetch_metrics_stub(tick_counter).await;
+    let mut snapshot = fetch_metrics(tick_counter, unraid_client.as_ref()).await;
 
     let mut metrics_interval = time::interval(METRICS_REFRESH_INTERVAL);
     metrics_interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
@@ -146,7 +148,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         tokio::select! {
             _ = metrics_interval.tick() => {
                 tick_counter += 1;
-                snapshot = fetch_metrics_stub(tick_counter).await;
+                snapshot = fetch_metrics(tick_counter, unraid_client.as_ref()).await;
 
                 let updated = update_page(
                     page,
@@ -271,6 +273,19 @@ async fn fetch_metrics_stub(tick: u64) -> MetricsSnapshot {
     }
 }
 
+async fn fetch_metrics(tick: u64, client: Option<&UnraidClient>) -> MetricsSnapshot {
+    let Some(client) = client else {
+        return fetch_metrics_stub(tick).await;
+    };
+
+    match client.fetch_metrics_snapshot().await {
+        Ok(snapshot) => snapshot,
+        Err(err) => {
+            eprintln!("Live metrics fetch failed: {err}. Using fallback values.");
+            fetch_metrics_stub(tick).await
+        }
+    }
+}
 fn poll_button_actions_stub() -> ButtonActions {
     // Placeholder for future MCP2221 GPIO button reads.
     ButtonActions::default()

@@ -4,9 +4,12 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+chrono = { version = "0.4", features = ["clock"] }
 display-interface-i2c = "0.5"
 embedded-graphics = "0.8"
 embedded-hal = "1.0"
 mcp2221-hal = "0.1"
+reqwest = { version = "0.12", default-features = false, features = ["json"] }
+serde = { version = "1", features = ["derive"] }
 ssd1306 = "0.10"
 tokio = { version = "1", features = ["macros", "rt", "time"] }

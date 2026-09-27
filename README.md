@@ -76,8 +76,7 @@ You can run without privileged mode by mapping one stable device node.
      - Host Path: `/run/udev`
      - Container Path: `/run/udev`
      - Access Mode: `Read Only`
-4. mkdir -p /etc/udev/rules.d
-5. Start the container and test.
+4. Start the container and test.
 
 Why `/dev/hidraw0` in the container?
 
@@ -102,8 +101,25 @@ docker run --rm \
 - Button polling is disabled by default; set `MCP2221_ENABLE_BUTTON=1` to enable it.
 - Button polling now uses the same MCP2221 session as display rendering to avoid dual-connection bus contention.
 
+## Live GraphQL Metrics
+
+The app now queries Unraid GraphQL for live values instead of fixed stubs.
+
+- Endpoint env var: `UNRAID_GRAPHQL_URL` (default: `http://tower.local/graphql`)
+- API key env var: `UNRAID_API_KEY`
+
+Queried values:
+
+- `server.lanip` for current IP
+- `metrics.memory.total` and `metrics.memory.used` for RAM used/max
+- `array.capacity.kilobytes.total/used` for array percent and max TB
+- `array.caches` (`name=cache`, `fsSize`, `fsUsed`) for cache percent and max TB
+- `info.os.uptime` to derive uptime display (`Xd YYh`)
+
+If live query fails, the app logs the error and temporarily falls back to representative values so the screen keeps updating.
+
 ## Project Status
 
 - [X] Test deployment to private ghcr and pull from unraid
 - [X] Deploy to unraid and test mcp2221 with example output
-- [ ] Integrate with unriad api to pull metrics
+- [X] Integrate with unriad api to pull metrics
