@@ -3,7 +3,7 @@ use std::{env, io, time::Duration};
 mod types;
 mod unraid;
 
-use crate::types::MetricsSnapshot;
+use crate::types::{MetricsSnapshot, StoragePageMetrics};
 use crate::unraid::UnraidClient;
 use display_interface_i2c::I2CInterface;
 use embedded_graphics::{
@@ -32,31 +32,6 @@ struct DisplayConnection {
     speed_bps: u32,
 }
 
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum ScreenPage {
-    Overview,
-    Memory,
-    Storage,
-}
-
-impl ScreenPage {
-    fn next(self) -> Self {
-        match self {
-            Self::Overview => Self::Memory,
-            Self::Memory => Self::Storage,
-            Self::Storage => Self::Overview,
-        }
-    }
-
-    fn previous(self) -> Self {
-        match self {
-            Self::Overview => Self::Storage,
-            Self::Memory => Self::Overview,
-            Self::Storage => Self::Memory,
-        }
-    }
-}
 
 #[derive(Default)]
 struct ButtonActions {
@@ -130,7 +105,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut display_connection = connect_display()?;
     let mut button_reader = ButtonReader::new();
-    let mut page = ScreenPage::Overview;
+    let mut page_index: usize = 0;
     let mut tick_counter: u64 = 0;
     let mut snapshot = fetch_metrics(tick_counter, unraid_client.as_ref()).await;
 
@@ -140,7 +115,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut button_interval = time::interval(BUTTON_POLL_INTERVAL);
     button_interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
 
-    render_metrics_page(&mut display_connection.display, page, &snapshot)?;
+    render_metrics_page(&mut display_connection.display, page_index, &snapshot)?;
 
     loop {
         let mut should_render = false;
@@ -151,13 +126,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 snapshot = fetch_metrics(tick_counter, unraid_client.as_ref()).await;
 
                 let updated = update_page(
-                    page,
+                    page_index,
                     ButtonActions::default(),
                     auto_cycle_pages,
                     tick_counter,
+                    total_pages(&snapshot),
                 );
-                if updated != page {
-                    page = updated;
+                if updated != page_index {
+                    page_index = updated;
                 }
 
                 should_render = true;
@@ -182,16 +158,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 };
 
-                let next_page = update_page(page, actions, auto_cycle_pages, tick_counter);
-                if next_page != page {
-                    page = next_page;
+                let next_page = update_page(page_index, actions, auto_cycle_pages, tick_counter, total_pages(&snapshot));
+                if next_page != page_index {
+                    page_index = next_page;
                     should_render = true;
                 }
             }
         }
 
+        page_index = page_index.min(total_pages(&snapshot).saturating_sub(1));
+
         if should_render {
-            if let Err(err) = render_metrics_page(&mut display_connection.display, page, &snapshot) {
+            if let Err(err) = render_metrics_page(&mut display_connection.display, page_index, &snapshot) {
                 eprintln!("Display write failed: {err}. Reconnecting display...");
                 button_reader.configured = false;
                 display_connection = connect_display()?;
@@ -204,14 +182,14 @@ async fn run_dry_run_preview(auto_cycle_pages: bool) {
     println!("Dry run enabled. Hardware access is skipped.");
     println!("Rendering preview text for local layout checks.");
 
-    let mut page = ScreenPage::Overview;
+    let mut page_index: usize = 0;
     for tick in 1..=4 {
         let snapshot = fetch_metrics_stub(tick).await;
         let actions = poll_button_actions_stub();
-        page = update_page(page, actions, auto_cycle_pages, tick);
+        page_index = update_page(page_index, actions, auto_cycle_pages, tick, total_pages(&snapshot));
 
         println!("--- Preview tick {tick} ---");
-        for line in build_page_lines(page, &snapshot) {
+        for line in build_page_lines(page_index, &snapshot) {
             println!("{line}");
         }
 
@@ -270,6 +248,22 @@ async fn fetch_metrics_stub(tick: u64) -> MetricsSnapshot {
         array_max_tb: 36.0,
         cache_used_pct: cache_used.min(92.0),
         cache_max_tb: 2.0,
+        storage_pages: vec![
+            StoragePageMetrics {
+                title: "Array".to_string(),
+                used_pct: array_used.min(95.0),
+                max_tb: 36.0,
+                disk_count: 12,
+                active_count: 8,
+            },
+            StoragePageMetrics {
+                title: "Cache".to_string(),
+                used_pct: cache_used.min(92.0),
+                max_tb: 2.0,
+                disk_count: 2,
+                active_count: 1,
+            },
+        ],
     }
 }
 
@@ -331,23 +325,25 @@ fn rewrap_display_from_mcp(mcp: MCP2221, addr: u8, speed_bps: u32) -> io::Result
     Ok(Ssd1306::new(interface, DisplaySize128x64, DisplayRotation::Rotate0).into_buffered_graphics_mode())
 }
 
-fn update_page(current: ScreenPage, actions: ButtonActions, auto_cycle_pages: bool, tick: u64) -> ScreenPage {
+fn update_page(current: usize, actions: ButtonActions, auto_cycle_pages: bool, tick: u64, total_pages: usize) -> usize {
+    let total = total_pages.max(1);
+
     if actions.next_page {
-        return current.next();
+        return (current + 1) % total;
     }
 
     if actions.previous_page {
-        return current.previous();
+        return (current + total - 1) % total;
     }
 
     if auto_cycle_pages && tick % 3 == 0 {
-        return current.next();
+        return (current + 1) % total;
     }
 
     current
 }
 
-fn render_metrics_page(display: &mut OledDisplay, page: ScreenPage, metrics: &MetricsSnapshot) -> io::Result<()> {
+fn render_metrics_page(display: &mut OledDisplay, page_index: usize, metrics: &MetricsSnapshot) -> io::Result<()> {
     display
         .clear(BinaryColor::Off)
         .map_err(|e| io::Error::other(format!("display clear failed: {e:?}")))?;
@@ -357,7 +353,7 @@ fn render_metrics_page(display: &mut OledDisplay, page: ScreenPage, metrics: &Me
         .text_color(BinaryColor::On)
         .build();
 
-    for (index, line) in build_page_lines(page, metrics).iter().enumerate() {
+    for (index, line) in build_page_lines(page_index, metrics).iter().enumerate() {
         Text::with_baseline(line, Point::new(0, (index as i32) * 10), text_style, Baseline::Top)
             .draw(display)
             .map_err(|e| io::Error::other(format!("text draw failed: {e:?}")))?;
@@ -368,33 +364,72 @@ fn render_metrics_page(display: &mut OledDisplay, page: ScreenPage, metrics: &Me
         .map_err(|e| io::Error::other(format!("display flush failed: {e:?}")))
 }
 
-fn build_page_lines(page: ScreenPage, metrics: &MetricsSnapshot) -> Vec<String> {
-    match page {
-        ScreenPage::Overview => vec![
-            "Unraid Status".to_string(),
+fn build_page_lines(page_index: usize, metrics: &MetricsSnapshot) -> Vec<String> {
+    let total = total_pages(metrics);
+
+    match page_index {
+        0 => vec![
+            build_header_line("Overview", page_index, total),
             format!("IP     {}", metrics.ip_address),
             format!("RAM    {:.1}/{:.1} GiB", metrics.ram_used_gib, metrics.ram_max_gib),
-            format!("Array  {:.0}% of {:.0} TB", metrics.array_used_pct, metrics.array_max_tb),
-            format!("Cache  {:.0}% of {:.0} TB", metrics.cache_used_pct, metrics.cache_max_tb),
-            format!("UP     {}", metrics.uptime),
-        ],
-        ScreenPage::Memory => vec![
-            "Memory".to_string(),
-            format!("Used   {:.1} GiB", metrics.ram_used_gib),
-            format!("Total  {:.1} GiB", metrics.ram_max_gib),
-            format!("Free   {:.1} GiB", (metrics.ram_max_gib - metrics.ram_used_gib).max(0.0)),
-            format!("IP     {}", metrics.ip_address),
-            format!("UP     {}", metrics.uptime),
-        ],
-        ScreenPage::Storage => vec![
-            "Storage".to_string(),
             format!("Array  {:.0}% / {:.0} TB", metrics.array_used_pct, metrics.array_max_tb),
             format!("Cache  {:.0}% / {:.0} TB", metrics.cache_used_pct, metrics.cache_max_tb),
-            format!("RAM    {:.1}/{:.1} GiB", metrics.ram_used_gib, metrics.ram_max_gib),
-            format!("IP     {}", metrics.ip_address),
             format!("UP     {}", metrics.uptime),
         ],
+        1 => {
+            let ram_free = (metrics.ram_max_gib - metrics.ram_used_gib).max(0.0);
+            let ram_pct = if metrics.ram_max_gib > 0.0 {
+                (metrics.ram_used_gib / metrics.ram_max_gib) * 100.0
+            } else {
+                0.0
+            };
+
+            vec![
+                build_header_line("Memory", page_index, total),
+                format!("Used   {:.1} GiB", metrics.ram_used_gib),
+                format!("Total  {:.1} GiB", metrics.ram_max_gib),
+                format!("Free   {:.1} GiB", ram_free),
+                format!("Usage  {:.0}%", ram_pct),
+                "Live memory data".to_string(),
+            ]
+        }
+        _ => {
+            let storage_idx = page_index.saturating_sub(2);
+            let storage = metrics.storage_pages.get(storage_idx);
+            if let Some(storage) = storage {
+                vec![
+                    build_header_line(&format!("Storage:{}", storage.title), page_index, total),
+                    format!("Used   {:.0}% / {:.1} TB", storage.used_pct, storage.max_tb),
+                    format!("Disks  {}", storage.disk_count),
+                    format!("Active {}", storage.active_count),
+                    "".to_string(),
+                    "".to_string(),
+                ]
+            } else {
+                vec![
+                    build_header_line("Storage", page_index, total),
+                    "No storage page data".to_string(),
+                    "".to_string(),
+                    "".to_string(),
+                    "".to_string(),
+                    "".to_string(),
+                ]
+            }
+        }
     }
+}
+
+fn total_pages(metrics: &MetricsSnapshot) -> usize {
+    2 + metrics.storage_pages.len()
+}
+
+fn build_header_line(title: &str, page_index: usize, total_pages: usize) -> String {
+    let indicator = format!("{}/{}", page_index + 1, total_pages.max(1));
+    let max_chars: usize = 21;
+    let max_title = max_chars.saturating_sub(indicator.len() + 1);
+    let trimmed = title.chars().take(max_title).collect::<String>();
+    let spacing = max_chars.saturating_sub(trimmed.len() + indicator.len());
+    format!("{trimmed}{:spacing$}{indicator}", "", spacing = spacing)
 }
 
 fn try_connect_display(addr: u8, speed: I2cSpeed) -> Result<OledDisplay, io::Error> {

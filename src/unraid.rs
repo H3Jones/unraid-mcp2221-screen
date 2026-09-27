@@ -3,7 +3,7 @@ use std::{env, io, time::Duration};
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
 
-use crate::types::MetricsSnapshot;
+use crate::types::{MetricsSnapshot, StoragePageMetrics};
 
 const BYTES_PER_GIB: f64 = 1024.0 * 1024.0 * 1024.0;
 const KIB_PER_TB: f64 = 1_000_000_000.0;
@@ -14,7 +14,8 @@ query ScreenMetrics {
     metrics { memory { total used } }
     array {
         capacity { kilobytes { total used } }
-        caches { name fsSize fsUsed }
+        disks { isSpinning }
+        caches { name fsSize fsUsed isSpinning }
     }
 }
 "#;
@@ -73,6 +74,7 @@ struct MemoryMetrics {
 #[derive(Deserialize)]
 struct ArrayRoot {
     capacity: ArrayCapacityRoot,
+    disks: Vec<ArrayDisk>,
     caches: Vec<CacheDisk>,
 }
 
@@ -94,6 +96,14 @@ struct CacheDisk {
     fs_size: Option<i64>,
     #[serde(rename = "fsUsed")]
     fs_used: Option<i64>,
+    #[serde(rename = "isSpinning")]
+    is_spinning: Option<bool>,
+}
+
+#[derive(Deserialize)]
+struct ArrayDisk {
+    #[serde(rename = "isSpinning")]
+    is_spinning: Option<bool>,
 }
 
 impl UnraidClient {
@@ -183,6 +193,39 @@ fn map_graphql_to_snapshot(data: ScreenMetricsData) -> MetricsSnapshot {
         0.0
     };
 
+    let array_disk_count = data.array.disks.len() as u32;
+    let array_active_count = data
+        .array
+        .disks
+        .iter()
+        .filter(|disk| disk.is_spinning.unwrap_or(false))
+        .count() as u32;
+
+    let cache_disk_count = data.array.caches.len() as u32;
+    let cache_active_count = data
+        .array
+        .caches
+        .iter()
+        .filter(|disk| disk.is_spinning.unwrap_or(false))
+        .count() as u32;
+
+    let storage_pages = vec![
+        StoragePageMetrics {
+            title: "Array".to_string(),
+            used_pct: array_used_pct as f32,
+            max_tb: (array_max_tb as f32).max(0.0),
+            disk_count: array_disk_count,
+            active_count: array_active_count,
+        },
+        StoragePageMetrics {
+            title: "Cache".to_string(),
+            used_pct: cache_used_pct as f32,
+            max_tb: ((cache_max_kib / KIB_PER_TB) as f32).max(0.0),
+            disk_count: cache_disk_count,
+            active_count: cache_active_count,
+        },
+    ];
+
     MetricsSnapshot {
         ip_address: data.server.lanip,
         uptime: format_uptime(&data.info.os.uptime),
@@ -192,6 +235,7 @@ fn map_graphql_to_snapshot(data: ScreenMetricsData) -> MetricsSnapshot {
         array_max_tb: (array_max_tb as f32).max(0.0),
         cache_used_pct: cache_used_pct as f32,
         cache_max_tb: ((cache_max_kib / KIB_PER_TB) as f32).max(0.0),
+        storage_pages,
     }
 }
 
