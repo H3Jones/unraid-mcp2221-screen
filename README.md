@@ -98,6 +98,9 @@ docker run --rm \
 - The binary tries SSD1306 addresses `0x3C` then `0x3D`.
 - It tries I2C bus speeds `100k` and `50k`.
 - `MCP2221_DRY_RUN=1` skips all hardware access and is intended for local sanity checks.
+- One page-cycle button is wired on MCP2221 `GP1` (active-low). A press advances to the next screen.
+- Button polling is disabled by default; set `MCP2221_ENABLE_BUTTON=1` to enable it.
+- Button polling now uses the same MCP2221 session as display rendering to avoid dual-connection bus contention.
 
 ## Project Status
 
