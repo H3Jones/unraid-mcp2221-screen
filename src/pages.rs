@@ -17,12 +17,15 @@ struct OverviewPage;
 
 impl InfoPage for OverviewPage {
     fn build(&self, page_index: usize, total_pages: usize, metrics: &MetricsSnapshot) -> Vec<String> {
+        let array_used_tb = metrics.array_used_pct / 100.0 * metrics.array_max_tb;
+        let cache_used_tb = metrics.cache_used_pct / 100.0 * metrics.cache_max_tb;
+
         normalize_page_lines(vec![
             build_header_line("Overview", page_index, total_pages),
             metric_line!("IP", "{}", metrics.ip_address),
             metric_line!("RAM", "{:.1}/{:.1} GiB", metrics.ram_used_gib, metrics.ram_max_gib),
-            metric_line!("Array", "{:.0}% / {:.0} TB", metrics.array_used_pct, metrics.array_max_tb),
-            metric_line!("Cache", "{:.0}% / {:.0} TB", metrics.cache_used_pct, metrics.cache_max_tb),
+            metric_line!("Array", "{:.1}/{:.1} TB", array_used_tb, metrics.array_max_tb),
+            metric_line!("Cache", "{:.1}/{:.1} TB", cache_used_tb, metrics.cache_max_tb),
             metric_line!("Uptime", "{}", metrics.uptime),
         ])
     }
@@ -61,10 +64,11 @@ impl InfoPage for StoragePage {
                 "No storage page data".to_string(),
             ]);
         };
+        let used_tb = storage.used_pct / 100.0 * storage.max_tb;
 
         normalize_page_lines(vec![
             build_header_line(&format!("Storage:{}", storage.title), page_index, total_pages),
-            metric_line!("Used", "{:.0}% / {:.1} TB", storage.used_pct, storage.max_tb),
+            metric_line!("Used", "{:.1}/{:.1} TB", used_tb, storage.max_tb),
             metric_line!("Disks", "{}", storage.disk_count),
             metric_line!("Active", "{}", storage.active_count),
         ])
