@@ -323,7 +323,7 @@ fn rewrap_display_from_mcp(mcp: MCP2221, addr: u8, speed_bps: u32) -> io::Result
         .map_err(|e| io::Error::other(format!("set bus speed failed: {e:?}")))?;
 
     let interface = I2CDisplayInterface::new_custom_address(mcp, addr);
-    Ok(Ssd1306::new(interface, DisplaySize128x64, DisplayRotation::Rotate0).into_buffered_graphics_mode())
+    Ok(Ssd1306::new(interface, DisplaySize128x64, DisplayRotation::Rotate180).into_buffered_graphics_mode())
 }
 
 fn update_page(current: usize, actions: ButtonActions, auto_cycle_pages: bool, tick: u64, total_pages: usize) -> usize {
@@ -375,7 +375,7 @@ fn try_connect_display(addr: u8, speed: I2cSpeed) -> Result<OledDisplay, io::Err
 
     let interface = I2CDisplayInterface::new_custom_address(mcp, addr);
     let mut display =
-        Ssd1306::new(interface, DisplaySize128x64, DisplayRotation::Rotate0).into_buffered_graphics_mode();
+        Ssd1306::new(interface, DisplaySize128x64, DisplayRotation::Rotate180).into_buffered_graphics_mode();
 
     display
         .init()
