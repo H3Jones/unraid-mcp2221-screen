@@ -88,14 +88,8 @@ impl ButtonReader {
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let dry_run = env_flag_enabled("MCP2221_DRY_RUN");
     let auto_cycle_pages = env_flag_enabled("MCP2221_AUTO_CYCLE_PAGES");
     let enable_button = env_flag_enabled("MCP2221_ENABLE_BUTTON");
-
-    if dry_run {
-        run_dry_run_preview(auto_cycle_pages).await;
-        return Ok(());
-    }
 
     let mut unraid_client = match UnraidClient::from_env() {
         Ok(client) => Some(client),
@@ -176,25 +170,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 button_reader.configured = false;
                 display_connection = connect_display()?;
             }
-    }
-}
-
-async fn run_dry_run_preview(auto_cycle_pages: bool) {
-    println!("Dry run enabled. Hardware access is skipped.");
-    println!("Rendering preview text for local layout checks.");
-
-    let mut page_index: usize = 0;
-    for tick in 1..=4 {
-        let snapshot = fetch_metrics_stub(tick).await;
-        let actions = poll_button_actions_stub();
-        page_index = update_page(page_index, actions, auto_cycle_pages, tick, total_pages(&snapshot));
-
-        println!("--- Preview tick {tick} ---");
-        for line in build_page_lines(page_index, &snapshot) {
-            println!("{line}");
-        }
-
-        time::sleep(Duration::from_millis(500)).await;
     }
 }
 
@@ -281,11 +256,6 @@ async fn fetch_metrics(tick: u64, client: Option<&mut UnraidClient>) -> MetricsS
         }
     }
 }
-fn poll_button_actions_stub() -> ButtonActions {
-    // Placeholder for future MCP2221 GPIO button reads.
-    ButtonActions::default()
-}
-
 fn read_button_gp1_pressed(device: &MCP2221, configured: &mut bool) -> io::Result<bool> {
     if !*configured {
         let Pins { gp1, .. } = device

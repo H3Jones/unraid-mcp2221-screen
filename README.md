@@ -27,13 +27,7 @@ Important: this app uses HID access (hidapi), not the MCP2221 UART serial interf
 docker build -t unraid-mcp2221-screen:local .
 ```
 
-2. Run dry mode (no hardware required):
-
-```bash
-docker run --rm -e MCP2221_DRY_RUN=1 unraid-mcp2221-screen:local
-```
-
-3. Run with hardware (simple privileged test):
+2. Run with MCP2221/OLED hardware attached (simple privileged test):
 
 ```bash
 docker run --rm \
@@ -95,7 +89,6 @@ Environment variables:
 
 - UNRAID_API_KEY: required, Unraid GraphQL API key
 - UNRAID_GRAPHQL_URL: optional endpoint override
-- MCP2221_DRY_RUN: set to 1 for console preview without hardware
 - MCP2221_ENABLE_BUTTON: set to 1 to enable GP1 button polling
 
 ## GraphQL Endpoint Selection
@@ -147,8 +140,11 @@ GraphQL auth errors:
 
 ```bash
 cargo check
+cargo test
 cargo run
 ```
+
+`cargo run` requires an MCP2221 and OLED; hardware-free checks and tests are run with `cargo check` and `cargo test`.
 
 ## Project State
 

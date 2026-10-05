@@ -9,11 +9,7 @@ check:
 test:
 	cargo test
 
-# Local test without hardware attached.
-run-dry:
-	$env:MCP2221_DRY_RUN='1'; cargo run
-
-# Local test with MCP2221/OLED hardware attached.
+# Run the application with MCP2221/OLED hardware attached.
 run-hw:
 	cargo run
 
@@ -21,6 +17,6 @@ run-hw:
 run-hw-button:
 	$env:MCP2221_ENABLE_BUTTON='1'; cargo run
 
-# Full local validation pass.
+# Hardware-free validation; exercises compile-time checks and automated tests only.
 verify-local:
-	cargo check; cargo test; $env:MCP2221_DRY_RUN='1'; cargo run
+	cargo check; cargo test
