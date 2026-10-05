@@ -89,7 +89,7 @@ Environment variables:
 
 - UNRAID_API_KEY: required, Unraid GraphQL API key
 - UNRAID_GRAPHQL_URL: optional endpoint override
-- MCP2221_ENABLE_BUTTON: set to 1 to enable GP1 button polling
+- MCP2221_ENABLE_BUTTON: defaults to enabled; set to 0, false, no, or off to disable GP1 button polling
 
 ## GraphQL Endpoint Selection
 

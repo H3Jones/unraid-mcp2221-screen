@@ -89,7 +89,7 @@ impl ButtonReader {
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let auto_cycle_pages = env_flag_enabled("MCP2221_AUTO_CYCLE_PAGES");
-    let enable_button = env_flag_enabled("MCP2221_ENABLE_BUTTON");
+    let enable_button = env_flag_enabled_or_default("MCP2221_ENABLE_BUTTON", true);
 
     let mut unraid_client = match UnraidClient::from_env() {
         Ok(client) => Some(client),
@@ -201,12 +201,20 @@ fn connect_display() -> io::Result<DisplayConnection> {
 }
 
 fn env_flag_enabled(name: &str) -> bool {
+    env_flag_enabled_or_default(name, false)
+}
+
+fn env_flag_enabled_or_default(name: &str, default: bool) -> bool {
     match env::var(name) {
         Ok(value) => {
             let v = value.trim().to_ascii_lowercase();
-            v == "1" || v == "true" || v == "yes" || v == "on"
+            match v.as_str() {
+                "1" | "true" | "yes" | "on" => true,
+                "0" | "false" | "no" | "off" => false,
+                _ => default,
+            }
         }
-        Err(_) => false,
+        Err(_) => default,
     }
 }
 
