@@ -1,90 +1,18 @@
-use std::{env, io, time::Duration};
+use std::{env, time::Duration};
 
+mod display;
+mod pages;
 mod types;
 mod unraid;
-mod pages;
 
+use crate::display::{ButtonActions, ButtonReader, DisplayConnection};
+use crate::pages::total_pages;
 use crate::types::{MetricsSnapshot, StoragePageMetrics};
 use crate::unraid::UnraidClient;
-use crate::pages::{build_page_lines, total_pages};
-use display_interface_i2c::I2CInterface;
-use embedded_graphics::{
-    mono_font::{MonoTextStyleBuilder, ascii::FONT_6X10},
-    pixelcolor::BinaryColor,
-    prelude::*,
-    text::{Baseline, Text},
-};
-use mcp2221_hal::gpio::{Input, Pins};
-use mcp2221_hal::{MCP2221, i2c::I2cSpeed};
-use ssd1306::{
-    I2CDisplayInterface, Ssd1306,
-    mode::{BufferedGraphicsMode, DisplayConfig},
-    prelude::{DisplayRotation, DisplaySize128x64},
-};
 use tokio::time::{self, MissedTickBehavior};
 
 const METRICS_REFRESH_INTERVAL: Duration = Duration::from_secs(10);
 const BUTTON_POLL_INTERVAL: Duration = Duration::from_millis(100);
-
-type OledDisplay = Ssd1306<I2CInterface<MCP2221>, DisplaySize128x64, BufferedGraphicsMode<DisplaySize128x64>>;
-
-struct DisplayConnection {
-    display: OledDisplay,
-    address: u8,
-    speed_bps: u32,
-}
-
-
-#[derive(Default)]
-struct ButtonActions {
-    next_page: bool,
-    previous_page: bool,
-}
-
-struct ButtonReader {
-    was_pressed: bool,
-    warned: bool,
-    configured: bool,
-}
-
-impl ButtonReader {
-    fn new() -> Self {
-        Self {
-            was_pressed: false,
-            warned: false,
-            configured: false,
-        }
-    }
-
-    fn poll(&mut self, mcp: &MCP2221) -> ButtonActions {
-        // Active-low button on GP1 with press-edge detection.
-        let pressed_now = match read_button_gp1_pressed(mcp, &mut self.configured) {
-            Ok(value) => {
-                self.warned = false;
-                value
-            }
-            Err(err) => {
-                if !self.warned {
-                    eprintln!("Button read disabled: {err}");
-                    self.warned = true;
-                }
-                false
-            }
-        };
-
-        let actions = ButtonActions {
-            next_page: pressed_now && !self.was_pressed,
-            previous_page: false,
-        };
-
-        if actions.next_page {
-            eprintln!("[trace] GP1 button press detected, cycling to next page");
-        }
-
-        self.was_pressed = pressed_now;
-        actions
-    }
-}
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -100,7 +28,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
-    let mut display_connection = connect_display()?;
+    let mut display_connection = DisplayConnection::connect()?;
     let mut button_reader = ButtonReader::new();
     let mut page_index: usize = 0;
     let mut tick_counter: u64 = 0;
@@ -113,7 +41,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut button_interval = time::interval(BUTTON_POLL_INTERVAL);
     button_interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
 
-    render_metrics_state(&mut display_connection.display, page_index, &snapshot, metrics_error.as_deref())?;
+    display_connection.render(page_index, &snapshot, metrics_error.as_deref())?;
 
     loop {
         let mut should_render = false;
@@ -138,24 +66,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 should_render = true;
             }
             _ = button_interval.tick(), if enable_button => {
-                let mcp = take_mcp_from_display(display_connection.display);
-                let actions = button_reader.poll(&mcp);
-
-                display_connection.display = match rewrap_display_from_mcp(
-                    mcp,
-                    display_connection.address,
-                    display_connection.speed_bps,
-                ) {
-                    Ok(display) => display,
-                    Err(err) => {
-                        eprintln!("Display rebuild failed after button poll: {err}. Re-scanning...");
-                        button_reader.configured = false;
-                        let replacement = connect_display()?;
-                        display_connection.address = replacement.address;
-                        display_connection.speed_bps = replacement.speed_bps;
-                        replacement.display
-                    }
-                };
+                let (replacement, actions) = display_connection.poll_button(&mut button_reader)?;
+                display_connection = replacement;
 
                 let next_page = update_page(page_index, actions, auto_cycle_pages, tick_counter, total_pages(&snapshot));
                 if next_page != page_index {
@@ -168,44 +80,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         page_index = page_index.min(total_pages(&snapshot).saturating_sub(1));
 
         if should_render
-            && let Err(err) = render_metrics_state(
-                &mut display_connection.display,
-                page_index,
-                &snapshot,
-                metrics_error.as_deref(),
-            ) {
-                eprintln!("Display write failed: {err}. Reconnecting display...");
-                button_reader.configured = false;
-                display_connection = connect_display()?;
-            }
-    }
-}
-
-fn connect_display() -> io::Result<DisplayConnection> {
-    let mut last_err: Option<io::Error> = None;
-
-    for speed in [I2cSpeed::standard_100k(), I2cSpeed::new(50_000)] {
-        for addr in [0x3C_u8, 0x3D_u8] {
-            println!("Trying SSD1306 128x64 at 0x{addr:02X}, {} bps", speed.speed());
-
-            match try_connect_display(addr, speed) {
-                Ok(display) => {
-                    println!("Connected to 128x64 at 0x{addr:02X}, {} bps", speed.speed());
-                    return Ok(DisplayConnection {
-                        display,
-                        address: addr,
-                        speed_bps: speed.speed(),
-                    });
-                }
-                Err(e) => {
-                    println!("Failed on 0x{addr:02X} at {} bps: {e}", speed.speed());
-                    last_err = Some(e);
-                }
-            }
+            && let Err(err) =
+                display_connection.render(page_index, &snapshot, metrics_error.as_deref())
+        {
+            eprintln!("Display write failed: {err}. Reconnecting display...");
+            button_reader.reset();
+            display_connection = DisplayConnection::connect()?;
         }
     }
-
-    Err(last_err.unwrap_or_else(|| io::Error::other("SSD1306 128x64 connect test failed")))
 }
 
 fn env_flag_enabled(name: &str) -> bool {
@@ -287,47 +169,14 @@ async fn load_metrics(
         }
     }
 }
-fn read_button_gp1_pressed(device: &MCP2221, configured: &mut bool) -> io::Result<bool> {
-    if !*configured {
-        let Pins { gp1, .. } = device
-            .gpio_take_pins()
-            .ok_or_else(|| io::Error::other("button pins already taken"))?;
 
-        let _button_pin: Input<'_> = gp1
-            .try_into()
-            .map_err(|e| io::Error::other(format!("button gp1 input config failed: {e:?}")))?;
-
-        *configured = true;
-    }
-
-    let values = device
-        .gpio_read()
-        .map_err(|e| io::Error::other(format!("button gpio_read failed: {e:?}")))?;
-
-    let (direction, level) = values
-        .gp1
-        .ok_or_else(|| io::Error::other("button gp1 is not in GPIO mode"))?;
-
-    if !direction.is_input() {
-        return Err(io::Error::other("button gp1 is not configured as input"));
-    }
-
-    Ok(level.is_low())
-}
-
-fn take_mcp_from_display(display: OledDisplay) -> MCP2221 {
-    display.release().release()
-}
-
-fn rewrap_display_from_mcp(mcp: MCP2221, addr: u8, speed_bps: u32) -> io::Result<OledDisplay> {
-    mcp.i2c_set_bus_speed(I2cSpeed::new(speed_bps))
-        .map_err(|e| io::Error::other(format!("set bus speed failed: {e:?}")))?;
-
-    let interface = I2CDisplayInterface::new_custom_address(mcp, addr);
-    Ok(Ssd1306::new(interface, DisplaySize128x64, DisplayRotation::Rotate180).into_buffered_graphics_mode())
-}
-
-fn update_page(current: usize, actions: ButtonActions, auto_cycle_pages: bool, tick: u64, total_pages: usize) -> usize {
+fn update_page(
+    current: usize,
+    actions: ButtonActions,
+    auto_cycle_pages: bool,
+    tick: u64,
+    total_pages: usize,
+) -> usize {
     let total = total_pages.max(1);
 
     if actions.next_page {
@@ -343,78 +192,4 @@ fn update_page(current: usize, actions: ButtonActions, auto_cycle_pages: bool, t
     }
 
     current
-}
-
-fn render_metrics_page(display: &mut OledDisplay, page_index: usize, metrics: &MetricsSnapshot) -> io::Result<()> {
-    display
-        .clear(BinaryColor::Off)
-        .map_err(|e| io::Error::other(format!("display clear failed: {e:?}")))?;
-
-    let text_style = MonoTextStyleBuilder::new()
-        .font(&FONT_6X10)
-        .text_color(BinaryColor::On)
-        .build();
-
-    for (index, line) in build_page_lines(page_index, metrics).iter().enumerate() {
-        Text::with_baseline(line, Point::new(0, (index as i32) * 10), text_style, Baseline::Top)
-            .draw(display)
-            .map_err(|e| io::Error::other(format!("text draw failed: {e:?}")))?;
-    }
-
-    display
-        .flush()
-        .map_err(|e| io::Error::other(format!("display flush failed: {e:?}")))
-}
-
-fn try_connect_display(addr: u8, speed: I2cSpeed) -> Result<OledDisplay, io::Error> {
-    let mcp = MCP2221::connect().map_err(|e| io::Error::other(format!("connect failed: {e:?}")))?;
-
-    mcp.i2c_set_bus_speed(speed)
-        .map_err(|e| io::Error::other(format!("set bus speed failed: {e:?}")))?;
-
-    let _ = mcp.i2c_cancel_transfer();
-
-    let interface = I2CDisplayInterface::new_custom_address(mcp, addr);
-    let mut display =
-        Ssd1306::new(interface, DisplaySize128x64, DisplayRotation::Rotate180).into_buffered_graphics_mode();
-
-    display
-        .init()
-        .map_err(|e| io::Error::other(format!("display init failed: {e:?}")))?;
-
-    Ok(display)
-}
-
-fn render_metrics_state(
-    display: &mut OledDisplay,
-    page_index: usize,
-    metrics: &MetricsSnapshot,
-    error: Option<&str>,
-) -> io::Result<()> {
-    if let Some(error) = error {
-        display
-            .clear(BinaryColor::Off)
-            .map_err(|e| io::Error::other(format!("display clear failed: {e:?}")))?;
-
-        let text_style = MonoTextStyleBuilder::new()
-            .font(&FONT_6X10)
-            .text_color(BinaryColor::On)
-            .build();
-        let error_chars = error.chars().collect::<Vec<_>>();
-        let lines = std::iter::once("Metrics unavailable".to_string())
-            .chain(error_chars.chunks(21).map(|chunk| chunk.iter().collect()))
-            .take(6);
-
-        for (index, line) in lines.enumerate() {
-            Text::with_baseline(&line, Point::new(0, (index as i32) * 10), text_style, Baseline::Top)
-                .draw(display)
-                .map_err(|e| io::Error::other(format!("text draw failed: {e:?}")))?;
-        }
-
-        return display
-            .flush()
-            .map_err(|e| io::Error::other(format!("display flush failed: {e:?}")));
-    }
-
-    render_metrics_page(display, page_index, metrics)
 }

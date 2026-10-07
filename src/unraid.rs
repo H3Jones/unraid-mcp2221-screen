@@ -1,8 +1,4 @@
-use std::{
-    env, io,
-    net::ToSocketAddrs,
-    time::Duration,
-};
+use std::{env, io, net::ToSocketAddrs, time::Duration};
 
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
@@ -145,7 +141,9 @@ impl UnraidClient {
             .http
             .post(graphql_url)
             .header("x-api-key", &self.api_key)
-            .json(&QueryBody { query: UNRAID_QUERY })
+            .json(&QueryBody {
+                query: UNRAID_QUERY,
+            })
             .send()
             .await
             .map_err(|e| io::Error::other(format!("graphql request failed: {e}")))?;
@@ -176,9 +174,10 @@ fn build_graphql_urls() -> Vec<String> {
     let mut urls = Vec::new();
 
     if let Ok(explicit) = env::var("UNRAID_GRAPHQL_URL")
-        && let Some(url) = normalize_graphql_url(&explicit) {
-            urls.push(url);
-        }
+        && let Some(url) = normalize_graphql_url(&explicit)
+    {
+        urls.push(url);
+    }
 
     if let Ok(hostname) = env::var("HOST_HOSTNAME") {
         let host = hostname.trim().to_ascii_lowercase();
