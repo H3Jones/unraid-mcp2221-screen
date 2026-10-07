@@ -361,3 +361,27 @@ fn format_uptime(boot_timestamp: &str) -> String {
         Err(_) => "n/a".to_string(),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{normalize_graphql_url, parse_kib_string};
+
+    #[test]
+    fn normalizes_graphql_urls() {
+        assert_eq!(
+            normalize_graphql_url(" http://tower.local/// "),
+            Some("http://tower.local/graphql".to_string())
+        );
+        assert_eq!(
+            normalize_graphql_url("http://tower.local/graphql/"),
+            Some("http://tower.local/graphql".to_string())
+        );
+        assert_eq!(normalize_graphql_url("  "), None);
+    }
+
+    #[test]
+    fn parses_capacity_values_and_defaults_invalid_values_to_zero() {
+        assert_eq!(parse_kib_string("123.5"), 123.5);
+        assert_eq!(parse_kib_string("not-a-number"), 0.0);
+    }
+}

@@ -122,3 +122,39 @@ fn build_header_line(title: &str, page_index: usize, total_pages: usize) -> Stri
     let spacing = max_chars.saturating_sub(trimmed.len() + indicator.len());
     format!("{trimmed}{:spacing$}{indicator}", "", spacing = spacing)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{build_page_lines, total_pages, DISPLAY_LINES};
+    use crate::types::{MetricsSnapshot, StoragePageMetrics};
+
+    #[test]
+    fn pages_have_six_lines_and_out_of_range_indexes_clamp_to_last_page() {
+        let metrics = MetricsSnapshot {
+            ip_address: "192.168.1.188".to_string(),
+            uptime: "1d 02h".to_string(),
+            ram_used_gib: 8.0,
+            ram_max_gib: 16.0,
+            array_used_pct: 50.0,
+            array_max_tb: 20.0,
+            cache_used_pct: 25.0,
+            cache_max_tb: 2.0,
+            storage_pages: vec![StoragePageMetrics {
+                title: "Array".to_string(),
+                used_pct: 50.0,
+                max_tb: 20.0,
+                disk_count: 4,
+                active_count: 2,
+            }],
+        };
+
+        assert_eq!(total_pages(&metrics), 3);
+        for page_index in 0..total_pages(&metrics) {
+            assert_eq!(build_page_lines(page_index, &metrics).len(), DISPLAY_LINES);
+        }
+
+        let last_page = build_page_lines(2, &metrics);
+        assert!(last_page[0].starts_with("Storage:Array"));
+        assert_eq!(build_page_lines(usize::MAX, &metrics), last_page);
+    }
+}
