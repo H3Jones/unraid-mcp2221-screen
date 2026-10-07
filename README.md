@@ -1,5 +1,7 @@
 # Unraid MCP2221 Screen
 
+![Unraid server case with the MCP2221 OLED metrics display installed](unraid-oled-display.png)
+
 Tiny Rust service that renders live Unraid metrics on an SSD1306 OLED over an MCP2221 USB-to-I2C bridge.
 
 Built for low resource usage and easy Docker deployment on Unraid.
