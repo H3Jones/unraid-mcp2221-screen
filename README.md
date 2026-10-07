@@ -46,7 +46,7 @@ docker run --rm \
   --privileged \
   -v /dev/bus/usb:/dev/bus/usb \
   -v /run/udev:/run/udev:ro \
-  ghcr.io/h3jones/unraid-mcp2221-screen:master
+  ghcr.io/h3jones/unraid-mcp2221-screen:release
 ```
 
 ### Option B: Recommended (Non-Privileged With udev)
@@ -80,7 +80,7 @@ Equivalent CLI:
 docker run --rm \
   -v /run/udev:/run/udev:ro \
   --device=/dev/mcp2221:/dev/hidraw0 \
-  ghcr.io/h3jones/unraid-mcp2221-screen:master
+  ghcr.io/h3jones/unraid-mcp2221-screen:release
 ```
 
 ## Configuration
