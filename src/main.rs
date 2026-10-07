@@ -90,11 +90,12 @@ impl ButtonReader {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let auto_cycle_pages = env_flag_enabled("MCP2221_AUTO_CYCLE_PAGES");
     let enable_button = env_flag_enabled_or_default("MCP2221_ENABLE_BUTTON", true);
+    let show_stub = env_flag_enabled("MCP2221_SHOW_STUB");
 
     let mut unraid_client = match UnraidClient::from_env() {
         Ok(client) => Some(client),
         Err(err) => {
-            eprintln!("Live metrics disabled: {err}. Falling back to representative stub values.");
+            eprintln!("Live metrics unavailable: {err}");
             None
         }
     };
@@ -103,7 +104,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut button_reader = ButtonReader::new();
     let mut page_index: usize = 0;
     let mut tick_counter: u64 = 0;
-    let mut snapshot = fetch_metrics(tick_counter, unraid_client.as_mut()).await;
+    let (mut snapshot, mut metrics_error) =
+        load_metrics(tick_counter, unraid_client.as_mut(), show_stub).await;
 
     let mut metrics_interval = time::interval(METRICS_REFRESH_INTERVAL);
     metrics_interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
@@ -111,7 +113,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut button_interval = time::interval(BUTTON_POLL_INTERVAL);
     button_interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
 
-    render_metrics_page(&mut display_connection.display, page_index, &snapshot)?;
+    render_metrics_state(&mut display_connection.display, page_index, &snapshot, metrics_error.as_deref())?;
 
     loop {
         let mut should_render = false;
@@ -119,7 +121,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         tokio::select! {
             _ = metrics_interval.tick() => {
                 tick_counter += 1;
-                snapshot = fetch_metrics(tick_counter, unraid_client.as_mut()).await;
+                (snapshot, metrics_error) =
+                    load_metrics(tick_counter, unraid_client.as_mut(), show_stub).await;
 
                 let updated = update_page(
                     page_index,
@@ -165,7 +168,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         page_index = page_index.min(total_pages(&snapshot).saturating_sub(1));
 
         if should_render
-            && let Err(err) = render_metrics_page(&mut display_connection.display, page_index, &snapshot) {
+            && let Err(err) = render_metrics_state(
+                &mut display_connection.display,
+                page_index,
+                &snapshot,
+                metrics_error.as_deref(),
+            ) {
                 eprintln!("Display write failed: {err}. Reconnecting display...");
                 button_reader.configured = false;
                 display_connection = connect_display()?;
@@ -251,16 +259,31 @@ async fn fetch_metrics_stub(tick: u64) -> MetricsSnapshot {
     }
 }
 
-async fn fetch_metrics(tick: u64, client: Option<&mut UnraidClient>) -> MetricsSnapshot {
+async fn fetch_metrics(client: Option<&mut UnraidClient>) -> Result<MetricsSnapshot, String> {
     let Some(client) = client else {
-        return fetch_metrics_stub(tick).await;
+        return Err("Unraid API client is not configured".to_string());
     };
 
     match client.fetch_metrics_snapshot().await {
-        Ok(snapshot) => snapshot,
+        Ok(snapshot) => Ok(snapshot),
+        Err(err) => Err(err.to_string()),
+    }
+}
+
+async fn load_metrics(
+    tick: u64,
+    client: Option<&mut UnraidClient>,
+    show_stub: bool,
+) -> (MetricsSnapshot, Option<String>) {
+    match fetch_metrics(client).await {
+        Ok(snapshot) => (snapshot, None),
+        Err(err) if show_stub => {
+            eprintln!("Live metrics unavailable: {err}. Showing stub values.");
+            (fetch_metrics_stub(tick).await, None)
+        }
         Err(err) => {
-            eprintln!("Live metrics fetch failed: {err}. Using fallback values.");
-            fetch_metrics_stub(tick).await
+            eprintln!("Live metrics unavailable: {err}");
+            (fetch_metrics_stub(tick).await, Some(err))
         }
     }
 }
@@ -360,4 +383,38 @@ fn try_connect_display(addr: u8, speed: I2cSpeed) -> Result<OledDisplay, io::Err
         .map_err(|e| io::Error::other(format!("display init failed: {e:?}")))?;
 
     Ok(display)
+}
+
+fn render_metrics_state(
+    display: &mut OledDisplay,
+    page_index: usize,
+    metrics: &MetricsSnapshot,
+    error: Option<&str>,
+) -> io::Result<()> {
+    if let Some(error) = error {
+        display
+            .clear(BinaryColor::Off)
+            .map_err(|e| io::Error::other(format!("display clear failed: {e:?}")))?;
+
+        let text_style = MonoTextStyleBuilder::new()
+            .font(&FONT_6X10)
+            .text_color(BinaryColor::On)
+            .build();
+        let error_chars = error.chars().collect::<Vec<_>>();
+        let lines = std::iter::once("Metrics unavailable".to_string())
+            .chain(error_chars.chunks(21).map(|chunk| chunk.iter().collect()))
+            .take(6);
+
+        for (index, line) in lines.enumerate() {
+            Text::with_baseline(&line, Point::new(0, (index as i32) * 10), text_style, Baseline::Top)
+                .draw(display)
+                .map_err(|e| io::Error::other(format!("text draw failed: {e:?}")))?;
+        }
+
+        return display
+            .flush()
+            .map_err(|e| io::Error::other(format!("display flush failed: {e:?}")));
+    }
+
+    render_metrics_page(display, page_index, metrics)
 }

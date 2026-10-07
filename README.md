@@ -90,6 +90,7 @@ Environment variables:
 - UNRAID_API_KEY: required, Unraid GraphQL API key
 - UNRAID_GRAPHQL_URL: optional endpoint override
 - MCP2221_ENABLE_BUTTON: defaults to enabled; set to 0, false, no, or off to disable GP1 button polling
+- MCP2221_SHOW_STUB: defaults to disabled; set to 1, true, yes, or on to show representative stub metrics when live metrics are unavailable. Otherwise, the OLED displays the error.
 
 ## GraphQL Endpoint Selection
 
